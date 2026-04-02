@@ -10,7 +10,7 @@ fi
 # Автор: @bivlked
 # Версия: 5.7.12
 # Дата: 2026-04-02
-# Репозиторий: https://github.com/bivlked/amneziawg-installer
+# Репозиторий: https://www.google.com/search?q=amneziawg-installer-custom
 # ==============================================================================
 
 # --- Безопасный режим и Константы ---
@@ -23,10 +23,9 @@ STATE_FILE="$AWG_DIR/setup_state"
 LOG_FILE="$AWG_DIR/install_amneziawg.log"
 KEYS_DIR="$AWG_DIR/keys"
 SERVER_CONF_FILE="/etc/amnezia/amneziawg/awg0.conf"
-AWG_BRANCH="${AWG_BRANCH:-v${SCRIPT_VERSION}}"
-COMMON_SCRIPT_URL="https://raw.githubusercontent.com/bivlked/amneziawg-installer/${AWG_BRANCH}/awg_common.sh"
+COMMON_SCRIPT_URL="https://raw.githubusercontent.com/Pranch9/amneziawg-installer-custom/refs/heads/main/awg_common.sh"
 COMMON_SCRIPT_PATH="$AWG_DIR/awg_common.sh"
-MANAGE_SCRIPT_URL="https://raw.githubusercontent.com/bivlked/amneziawg-installer/${AWG_BRANCH}/manage_amneziawg.sh"
+MANAGE_SCRIPT_URL="https://raw.githubusercontent.com/Pranch9/amneziawg-installer-custom/refs/heads/main/manage_amneziawg.sh"
 MANAGE_SCRIPT_PATH="$AWG_DIR/manage_amneziawg.sh"
 
 # Флаги CLI
