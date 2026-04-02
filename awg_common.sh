@@ -3,8 +3,8 @@
 # ==============================================================================
 # Общая библиотека функций для AmneziaWG 2.0
 # Автор: @bivlked
-# Версия: 5.7.11
-# Дата: 2026-03-31
+# Версия: 5.7.12
+# Дата: 2026-04-02
 # Репозиторий: https://github.com/bivlked/amneziawg-installer
 # ==============================================================================
 #
@@ -19,7 +19,7 @@ CONFIG_FILE="${CONFIG_FILE:-$AWG_DIR/awgsetup_cfg.init}"
 SERVER_CONF_FILE="${SERVER_CONF_FILE:-/etc/amnezia/amneziawg/awg0.conf}"
 KEYS_DIR="${KEYS_DIR:-$AWG_DIR/keys}"
 # shellcheck disable=SC2034
-AWG_COMMON_VERSION="5.7.11"
+AWG_COMMON_VERSION="5.7.12"
 
 # --- Автоочистка временных файлов ---
 # ВАЖНО: trap НЕ устанавливается здесь, чтобы не перезаписать trap вызывающего скрипта.
@@ -107,7 +107,8 @@ safe_load_config() {
                 OS_ID|OS_VERSION|OS_CODENAME|AWG_PORT|AWG_TUNNEL_SUBNET|\
                 DISABLE_IPV6|ALLOWED_IPS_MODE|ALLOWED_IPS|AWG_ENDPOINT|\
                 AWG_Jc|AWG_Jmin|AWG_Jmax|AWG_S1|AWG_S2|AWG_S3|AWG_S4|\
-                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|NO_TWEAKS|AWG_APPLY_MODE)
+                AWG_H1|AWG_H2|AWG_H3|AWG_H4|AWG_I1|AWG_I2|AWG_I3|AWG_I4|AWG_I5|\
+                NO_TWEAKS|AWG_APPLY_MODE)
                     export "$key=$value"
                     ;;
             esac
@@ -134,6 +135,23 @@ load_awg_params() {
             missing=1
         fi
     done
+    # I1-I5 опциональны, но рекомендуются для полной CPS обфускации
+    if [[ -z "${AWG_I1:-}" ]]; then
+        log_warn "I1 (CPS random bytes) не задан — CPS concealment неполный"
+    fi
+    if [[ -z "${AWG_I2:-}" ]]; then
+        log_warn "I2 (CPS pause) не задан — CPS concealment неполный"
+    fi
+    if [[ -z "${AWG_I3:-}" ]]; then
+        log_warn "I3 (CPS packet size) не задан — CPS concealment неполный"
+    fi
+    if [[ -z "${AWG_I4:-}" ]]; then
+        log_warn "I4 (CPS priority) не задан — CPS concealment неполный"
+    fi
+    if [[ -z "${AWG_I5:-}" ]]; then
+        log_warn "I5 (CPS delay) не задан — CPS concealment неполный"
+    fi
+
     if [[ $missing -eq 1 ]]; then
         return 1
     fi
@@ -278,9 +296,21 @@ H3 = ${AWG_H3}
 H4 = ${AWG_H4}
 EOF
 
-    # Добавляем I1 только если задан (CPS опционален)
+    # Добавляем все CPS параметры I1-I5 (полная обфускация)
     if [[ -n "${AWG_I1}" ]]; then
         echo "I1 = ${AWG_I1}" >> "$tmpfile"
+    fi
+    if [[ -n "${AWG_I2}" ]]; then
+        echo "I2 = ${AWG_I2}" >> "$tmpfile"
+    fi
+    if [[ -n "${AWG_I3}" ]]; then
+        echo "I3 = ${AWG_I3}" >> "$tmpfile"
+    fi
+    if [[ -n "${AWG_I4}" ]]; then
+        echo "I4 = ${AWG_I4}" >> "$tmpfile"
+    fi
+    if [[ -n "${AWG_I5}" ]]; then
+        echo "I5 = ${AWG_I5}" >> "$tmpfile"
     fi
 
     if ! mv "$tmpfile" "$SERVER_CONF_FILE"; then
@@ -308,6 +338,9 @@ render_client_config() {
     local conf_file="$AWG_DIR/${name}.conf"
     local allowed_ips="${ALLOWED_IPS:-0.0.0.0/0}"
 
+    # DNS серверы (можно настроить через переменную окружения)
+    local dns_servers="${AWG_DNS_SERVERS:-8.8.8.8, 1.1.1.1, 9.9.9.9}"
+
     local tmpfile
     tmpfile=$(awg_mktemp) || { log_error "Ошибка mktemp"; return 1; }
 
@@ -315,7 +348,7 @@ render_client_config() {
 [Interface]
 PrivateKey = ${client_privkey}
 Address = ${client_ip}/32
-DNS = 1.1.1.1
+DNS = ${dns_servers}
 MTU = 1280
 Jc = ${AWG_Jc}
 Jmin = ${AWG_Jmin}
@@ -330,8 +363,21 @@ H3 = ${AWG_H3}
 H4 = ${AWG_H4}
 EOF
 
+    # Добавляем CPS параметры для клиента (должны совпадать с сервером)
     if [[ -n "${AWG_I1}" ]]; then
         echo "I1 = ${AWG_I1}" >> "$tmpfile"
+    fi
+    if [[ -n "${AWG_I2}" ]]; then
+        echo "I2 = ${AWG_I2}" >> "$tmpfile"
+    fi
+    if [[ -n "${AWG_I3}" ]]; then
+        echo "I3 = ${AWG_I3}" >> "$tmpfile"
+    fi
+    if [[ -n "${AWG_I4}" ]]; then
+        echo "I4 = ${AWG_I4}" >> "$tmpfile"
+    fi
+    if [[ -n "${AWG_I5}" ]]; then
+        echo "I5 = ${AWG_I5}" >> "$tmpfile"
     fi
 
     cat >> "$tmpfile" << EOF
@@ -340,7 +386,7 @@ EOF
 PublicKey = ${server_pubkey}
 Endpoint = ${endpoint}:${port}
 AllowedIPs = ${allowed_ips}
-PersistentKeepalive = 33
+PersistentKeepalive = 25
 EOF
 
     if ! mv "$tmpfile" "$conf_file"; then
@@ -514,18 +560,15 @@ remove_peer_from_server() {
     tmpfile=$(awg_mktemp) || { log_error "Ошибка mktemp"; exec {lock_fd}>&-; return 1; }
 
     # Удаляем блок [Peer] содержащий #_Name = name
-    # Логика: буферизуем каждый [Peer] блок, проверяем имя, выводим только если не совпадает
     awk -v target="$name" '
     BEGIN { buf=""; is_target=0 }
     /^\[Peer\]/ {
-        # Вывести предыдущий буфер если он не target
         if (buf != "" && !is_target) printf "%s", buf
         buf = $0 "\n"
         is_target = 0
         next
     }
     /^\[/ && !/^\[Peer\]/ {
-        # Любая другая секция — сбросить буфер
         if (buf != "" && !is_target) printf "%s", buf
         buf = ""
         is_target = 0
@@ -624,11 +667,9 @@ generate_vpn_uri() {
     local raw_endpoint
     raw_endpoint=$(grep -oP 'Endpoint\s*=\s*\K\S+' "$conf_file") || return 1
     if [[ "$raw_endpoint" == \[* ]]; then
-        # IPv6: [addr]:port
         endpoint="${raw_endpoint%%]:*}"
         endpoint="${endpoint#\[}"
     else
-        # IPv4/hostname: addr:port
         endpoint="${raw_endpoint%:*}"
     fi
     allowed_ips=$(grep -oP 'AllowedIPs\s*=\s*\K.+' "$conf_file" | tr -d ' ') || allowed_ips="0.0.0.0/0"
@@ -638,7 +679,7 @@ generate_vpn_uri() {
     # shellcheck disable=SC2016
     vpn_uri=$(perl -MCompress::Zlib -MMIME::Base64 -e '
         my ($conf_path, $h1,$h2,$h3,$h4, $jc,$jmin,$jmax,
-            $s1,$s2,$s3,$s4, $i1, $port, $ep, $cip, $cpk, $spk, $aips) = @ARGV;
+            $s1,$s2,$s3,$s4, $i1,$i2,$i3,$i4,$i5, $port, $ep, $cip, $cpk, $spk, $aips) = @ARGV;
 
         open my $fh, "<", $conf_path or die;
         local $/; my $raw = <$fh>; close $fh;
@@ -655,10 +696,29 @@ generate_vpn_uri() {
         $inner .= qq("H1":"$h1","H2":"$h2","H3":"$h3","H4":"$h4",);
         $inner .= qq("Jc":"$jc","Jmin":"$jmin","Jmax":"$jmax",);
         $inner .= qq("S1":"$s1","S2":"$s2","S3":"$s3","S4":"$s4",);
+
+        # Добавляем все CPS параметры I1-I5
         if ($i1 ne "") {
             my $ei1 = je($i1);
-            $inner .= qq("I1":"$ei1","I2":"","I3":"","I4":"","I5":"",);
+            $inner .= qq("I1":"$ei1",);
         }
+        if ($i2 ne "") {
+            my $ei2 = je($i2);
+            $inner .= qq("I2":"$ei2",);
+        }
+        if ($i3 ne "") {
+            my $ei3 = je($i3);
+            $inner .= qq("I3":"$ei3",);
+        }
+        if ($i4 ne "") {
+            my $ei4 = je($i4);
+            $inner .= qq("I4":"$ei4",);
+        }
+        if ($i5 ne "") {
+            my $ei5 = je($i5);
+            $inner .= qq("I5":"$ei5",);
+        }
+
         my $eraw = je($raw);
         my @ips = split(/,/, $aips);
         my $ips_json = join(",", map { qq("$_") } @ips);
@@ -666,7 +726,7 @@ generate_vpn_uri() {
         $inner .= qq("client_ip":"$cip","client_priv_key":"$cpk",);
         $inner .= qq("config":"$eraw",);
         $inner .= qq("hostName":"$ep","mtu":"1280",);
-        $inner .= qq("persistent_keep_alive":"33","port":$port,);
+        $inner .= qq("persistent_keep_alive":"25","port":$port,);
         $inner .= qq("server_pub_key":"$spk"});
 
         my $einner = je($inner);
@@ -674,10 +734,10 @@ generate_vpn_uri() {
         $outer .= qq("containers":[{"awg":{"isThirdPartyConfig":true,);
         $outer .= qq("last_config":"$einner",);
         $outer .= qq("port":"$port","protocol_version":"2",);
-        $outer .= qq("transport_proto":"udp"\},"container":"amnezia-awg"\}],);
+        $outer .= qq("transport_proto":"udp"},"container":"amnezia-awg"}],);
         $outer .= qq("defaultContainer":"amnezia-awg",);
         $outer .= qq("description":"AWG Server",);
-        $outer .= qq("dns1":"1.1.1.1","dns2":"1.0.0.1",);
+        $outer .= qq("dns1":"8.8.8.8","dns2":"1.1.1.1",);
         $outer .= qq("hostName":"$ep"});
 
         my $compressed = compress($outer);
@@ -690,7 +750,8 @@ generate_vpn_uri() {
         "$AWG_H1" "$AWG_H2" "$AWG_H3" "$AWG_H4" \
         "$AWG_Jc" "$AWG_Jmin" "$AWG_Jmax" \
         "$AWG_S1" "$AWG_S2" "$AWG_S3" "$AWG_S4" \
-        "$AWG_I1" "$AWG_PORT" "$endpoint" \
+        "${AWG_I1:-}" "${AWG_I2:-}" "${AWG_I3:-}" "${AWG_I4:-}" "${AWG_I5:-}" \
+        "$AWG_PORT" "$endpoint" \
         "$client_ip" "$client_privkey" "$server_pubkey" "$allowed_ips" 2>"$perl_err"
     )
 
@@ -822,7 +883,6 @@ regenerate_client() {
     if [[ -f "$KEYS_DIR/${name}.private" ]]; then
         client_privkey=$(cat "$KEYS_DIR/${name}.private")
     elif [[ -f "$AWG_DIR/${name}.conf" ]]; then
-        # Пробуем извлечь из существующего конфига
         client_privkey=$(sed -n 's/^PrivateKey[ \t]*=[ \t]*//p' "$AWG_DIR/${name}.conf" | tr -d '[:space:]')
     fi
 
@@ -832,7 +892,6 @@ regenerate_client() {
     fi
 
     # IP клиента из серверного конфига
-    # Ищем блок [Peer] с #_Name = name, затем AllowedIPs
     client_ip=$(awk -v target="$name" '
     /^\[Peer\]/ { in_peer=1; found=0; next }
     in_peer && $0 == "#_Name = " target { found=1; next }
@@ -863,7 +922,7 @@ regenerate_client() {
     fi
 
     # Сохраняем пользовательские настройки из текущего .conf (modify)
-    local current_dns="1.1.1.1" current_keepalive="33" current_allowed_ips="${ALLOWED_IPS:-0.0.0.0/0}"
+    local current_dns="8.8.8.8, 1.1.1.1" current_keepalive="25" current_allowed_ips="${ALLOWED_IPS:-0.0.0.0/0}"
     if [[ -f "$AWG_DIR/${name}.conf" ]]; then
         local _v
         _v=$(sed -n 's/^DNS[ \t]*=[ \t]*//p' "$AWG_DIR/${name}.conf" | tr -d '[:space:]')
@@ -914,9 +973,36 @@ validate_awg_config() {
         fi
     done
 
-    # I1 опционален, но рекомендован для AWG 2.0
+    # Проверка S1 и S2 в корректном диапазоне 0-64
+    local s1_val s2_val
+    s1_val=$(grep -oP '^S1\s*=\s*\K\d+' "$SERVER_CONF_FILE" 2>/dev/null)
+    s2_val=$(grep -oP '^S2\s*=\s*\K\d+' "$SERVER_CONF_FILE" 2>/dev/null)
+
+    if [[ -n "$s1_val" ]] && [[ $s1_val -lt 0 || $s1_val -gt 64 ]]; then
+        log_error "S1=$s1_val вне диапазона 0-64"
+        ok=0
+    fi
+
+    if [[ -n "$s2_val" ]] && [[ $s2_val -lt 0 || $s2_val -gt 64 ]]; then
+        log_error "S2=$s2_val вне диапазона 0-64"
+        ok=0
+    fi
+
+    # Проверка CPS параметров (рекомендованы)
     if ! grep -q "^I1 = " "$SERVER_CONF_FILE"; then
-        log_warn "Параметр I1 (CPS) не найден — CPS concealment не активен"
+        log_warn "Параметр I1 (CPS random bytes) не найден — CPS concealment неполный"
+    fi
+    if ! grep -q "^I2 = " "$SERVER_CONF_FILE"; then
+        log_warn "Параметр I2 (CPS pause) не найден — CPS concealment неполный"
+    fi
+    if ! grep -q "^I3 = " "$SERVER_CONF_FILE"; then
+        log_warn "Параметр I3 (CPS packet size) не найден — CPS concealment неполный"
+    fi
+    if ! grep -q "^I4 = " "$SERVER_CONF_FILE"; then
+        log_warn "Параметр I4 (CPS priority) не найден — CPS concealment неполный"
+    fi
+    if ! grep -q "^I5 = " "$SERVER_CONF_FILE"; then
+        log_warn "Параметр I5 (CPS delay) не найден — CPS concealment неполный"
     fi
 
     if [[ $ok -eq 1 ]]; then
@@ -949,7 +1035,7 @@ parse_duration() {
     case "$unit" in
         h) echo $((num * 3600)) ;;
         d) echo $((num * 86400)) ;;
-        w) echo $((num * 604800)) ;; # 7 дней
+        w) echo $((num * 604800)) ;;
         *) return 1 ;;
     esac
 }
@@ -1087,7 +1173,6 @@ CRONEOF
 remove_client_expiry() {
     local name="$1"
     rm -f "$EXPIRY_DIR/$name" 2>/dev/null
-    # Удаляем cron если больше нет клиентов с expiry
     if [[ -d "$EXPIRY_DIR" ]] && [[ -z "$(ls -A "$EXPIRY_DIR" 2>/dev/null)" ]]; then
         rm -f "$EXPIRY_CRON" 2>/dev/null
         log_debug "Cron-задача expiry удалена (нет клиентов с expiry)."
